@@ -1,10 +1,11 @@
-package server
+package cluster
 
 import (
 	"context"
 	"fmt"
 	"log"
 	"net"
+	"strconv"
 	"time"
 
 	config "github.com/davidmontoyago/go-grpc-gossiping-cluster/api"
@@ -16,32 +17,42 @@ import (
 // Node is a gRPC serving node of the cluster
 type Node struct {
 	config.UnimplementedConfigServiceServer
-	// name to identify the node by
-	Name string
 
 	// host and node ports for gossiping and api
-	addr       string
-	apiPort    int
-	gossipPort int
+	addr    string
+	apiPort int
 
-	// addr:port of any node in the cluster; empty if it's the first node
+	// addr:port of any node in the cluster to join to; empty if it's the first node
 	clusterNodeAddr string
 
-	// node internal state
-	config     map[string]string
+	// Holds the node data state; it's also the Delegate used by memberlist to gossip state
+	configStore *ConfigStore
+
+	memberConfig *memberlist.Config
+	memberlist   *memberlist.Memberlist
+
 	grpcServer *grpc.Server
-	memberlist *memberlist.Memberlist
 }
 
 // NewNode creates new gRPC serving node but does not start serving
 func NewNode(name string, addr string, apiPort, gossipPort int, clusterNodeAddr string) *Node {
+	config := memberlist.DefaultLocalConfig()
+	config.Name = name
+	config.BindAddr = addr
+	config.BindPort = gossipPort
+	config.AdvertisePort = config.BindPort
+
+	md := make(map[string]string, 1)
+	md["apiPort"] = strconv.Itoa(apiPort)
+	configStore := newConfigStore(md)
+	config.Delegate = configStore
+
 	return &Node{
-		Name:            name,
 		addr:            addr,
 		apiPort:         apiPort,
-		gossipPort:      gossipPort,
 		clusterNodeAddr: clusterNodeAddr,
-		config:          make(map[string]string, 10),
+		configStore:     configStore,
+		memberConfig:    config,
 	}
 }
 
@@ -51,10 +62,8 @@ func (n *Node) Put(ctx context.Context, req *config.PutConfigRequest) (*config.C
 	value := req.GetValue()
 
 	// update local state
-	n.config[key] = value
+	n.configStore.Put(req.GetKey(), req.GetValue())
 	log.Println("succesfully put config", key, value)
-
-	go n.distributeConfig(*req)
 
 	return &config.Config{Key: key, Value: value}, nil
 }
@@ -62,7 +71,7 @@ func (n *Node) Put(ctx context.Context, req *config.PutConfigRequest) (*config.C
 // Get fetches config from the local store
 func (n *Node) Get(ctx context.Context, req *config.GetConfigRequest) (*config.Config, error) {
 	key := req.GetKey()
-	value := n.config[key]
+	value := n.configStore.Get(key)
 
 	return &config.Config{Key: key, Value: value}, nil
 }
@@ -99,14 +108,8 @@ func (n *Node) serve(errChan chan error) {
 }
 
 func (n *Node) joinCluster(errChan chan error) {
-	config := memberlist.DefaultLocalConfig()
-	config.Name = n.Name
-	config.BindAddr = n.addr
-	config.BindPort = n.gossipPort
-	config.AdvertisePort = config.BindPort
-
 	var err error
-	n.memberlist, err = memberlist.Create(config)
+	n.memberlist, err = memberlist.Create(n.memberConfig)
 	if err != nil {
 		log.Println("failed to init memberlist", err)
 		errChan <- err
@@ -118,22 +121,13 @@ func (n *Node) joinCluster(errChan chan error) {
 		nodeAddr = n.clusterNodeAddr
 	} else {
 		log.Println("first node of the cluster...")
-		nodeAddr = fmt.Sprintf("%s:%d", n.addr, n.gossipPort)
+		nodeAddr = fmt.Sprintf("%s:%d", n.addr, n.memberConfig.BindPort)
 	}
 	_, err = n.memberlist.Join([]string{nodeAddr})
 	if err != nil {
 		log.Println("failed to join cluster", err)
 		errChan <- err
 	}
+
 	log.Println("succesfully joined cluster via", nodeAddr)
-}
-
-func (n *Node) distributeConfig(req config.PutConfigRequest) {
-	for _, member := range n.memberlist.Members() {
-		if member == n.memberlist.LocalNode() {
-			continue
-		}
-
-		log.Println("distributing config to", member.Addr)
-	}
 }

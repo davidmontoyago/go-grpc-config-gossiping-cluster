@@ -24,14 +24,17 @@ func main() {
 	}
 	log.Println("Successfully put config", resp)
 
-	log.Println("checking other nodes...")
-	conn, configClient = newClient(":9001")
+	log.Println("checking config at another node...")
+	conn, configClient = newClient(":9002")
 	defer conn.Close()
 	getReq := &config.GetConfigRequest{
 		Key: "cluster.config.test.prop",
 	}
 	for {
 		resp, err = configClient.Get(ctx, getReq)
+		if err != nil {
+			log.Fatal("failed to get config", err)
+		}
 		if resp.GetValue() == "distributed!" {
 			log.Println("config found! done.")
 			break

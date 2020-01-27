@@ -13,7 +13,7 @@ grpc:
 	protoc -I ./api/ -I ${GOPATH}/src --go_out=plugins=grpc:./api ./api/config.proto
 
 run-cluster:
-	go run ./main.go
+	go run -race ./main.go
 
 run-client:
 	go run ./client/main.go

@@ -8,22 +8,22 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/davidmontoyago/go-grpc-gossiping-cluster/server"
+	"github.com/davidmontoyago/go-grpc-gossiping-cluster/cluster"
 )
 
 func main() {
 	var errors []chan error
 
-	node1 := server.NewNode("node1", "127.0.0.1", 9000, 7900, "")
+	node1 := cluster.NewNode("node1", "127.0.0.1", 9000, 7900, "")
 	errors = append(errors, node1.Start())
 
 	// give first node a break
 	time.Sleep(1 * time.Second)
 
-	node2 := server.NewNode("node2", "127.0.0.1", 9001, 7901, "localhost:7900")
+	node2 := cluster.NewNode("node2", "127.0.0.1", 9001, 7901, "localhost:7900")
 	errors = append(errors, node2.Start())
 
-	node3 := server.NewNode("node3", "127.0.0.1", 9002, 7902, "localhost:7901")
+	node3 := cluster.NewNode("node3", "127.0.0.1", 9002, 7902, "localhost:7901")
 	errors = append(errors, node3.Start())
 
 	// agregate nodes errors into a single channel
